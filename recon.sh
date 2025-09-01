@@ -13,22 +13,51 @@ export LANG=C
 export LC_ALL=C
 
 # Configuration
-INTERFACE=""  # Auto-détection
-BASE_DIR="/home/pi/recon"
+CONFIG_FILE="$(dirname "$0")/config.json"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Fichier de configuration manquant: $CONFIG_FILE" >&2
+    exit 1
+fi
+if ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
+    echo "Fichier de configuration invalide: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+INTERFACE=$(jq -r '.interface // ""' "$CONFIG_FILE")
+BASE_DIR=$(jq -r '.base_dir // "/home/pi/recon"' "$CONFIG_FILE")
+GLOBAL_TIMEOUT=$(jq -r '.global_timeout // 600' "$CONFIG_FILE")
+ENABLE_MDNS=$(jq -r '.enable_mdns // 1' "$CONFIG_FILE")
+ENABLE_NETBIOS=$(jq -r '.enable_netbios // 1' "$CONFIG_FILE")
+ENABLE_TCPDUMP=$(jq -r '.enable_tcpdump // 1' "$CONFIG_FILE")
+
+ARP_TIMEOUT=$(jq -r '.timeouts.arp_scan // 60' "$CONFIG_FILE")
+NBTSCAN_TIMEOUT=$(jq -r '.timeouts.nbtscan // 90' "$CONFIG_FILE")
+NMAP_DISCOVERY_TIMEOUT=$(jq -r '.timeouts.nmap_discovery // 60' "$CONFIG_FILE")
+NMAP_DETAILED_TIMEOUT=$(jq -r '.timeouts.nmap_detailed // 300' "$CONFIG_FILE")
+TCPDUMP_TIMEOUT=$(jq -r '.timeouts.tcpdump // 125' "$CONFIG_FILE")
+MDNS_TIMEOUT=$(jq -r '.timeouts.mdns // 60' "$CONFIG_FILE")
+
+LOCK=$(jq -r '.paths.lockfile // "/var/run/recon.lock"' "$CONFIG_FILE")
+CONFLICT_LOG=$(jq -r '.paths.conflict_log // "/tmp/recon_conflict.log"' "$CONFIG_FILE")
+ERROR_LOG=$(jq -r '.paths.error_log // "/tmp/recon_error.log"' "$CONFIG_FILE")
+
+NMAP_TIMING=$(jq -r '.tools.nmap.timing // "T3"' "$CONFIG_FILE")
+NMAP_PORTS=$(jq -r '.tools.nmap.ports // "F"' "$CONFIG_FILE")
+NMAP_OPTIONS=$(jq -r '.tools.nmap.options // "-O -sC -n"' "$CONFIG_FILE")
+TCPDUMP_SNAPLEN=$(jq -r '.tools.tcpdump.snaplen // 0' "$CONFIG_FILE")
+TCPDUMP_OPTIONS=$(jq -r '.tools.tcpdump.options // "-nn"' "$CONFIG_FILE")
+
+IP_WAIT_ATTEMPTS=$(jq -r '.network.ip_wait_attempts // 30' "$CONFIG_FILE")
+IP_WAIT_INTERVAL=$(jq -r '.network.ip_wait_interval // 3' "$CONFIG_FILE")
+STABILIZATION_DELAY=$(jq -r '.network.stabilization_delay // 5' "$CONFIG_FILE")
+
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 OUTPUT_DIR="${BASE_DIR}/${TIMESTAMP}"
 LOG_FILE="${OUTPUT_DIR}/execution.log"
-GLOBAL_TIMEOUT=600  # 10 minutes
-LOCK="/var/run/recon.lock"
-
-# Options d'activation des modules
-ENABLE_MDNS=1
-ENABLE_NETBIOS=1  
-ENABLE_TCPDUMP=1
 
 # Gestion du lockfile
 if [ -e "$LOCK" ]; then
-    echo "[$(date)] Lock présent, autre instance en cours. Sortie." | tee -a /tmp/recon_conflict.log
+    echo "[$(date)] Lock présent, autre instance en cours. Sortie." | tee -a "$CONFLICT_LOG"
     exit 0
 fi
 trap 'rm -f "$LOCK"' EXIT
@@ -36,7 +65,7 @@ touch "$LOCK"
 
 # Vérification root obligatoire
 if [ "$EUID" -ne 0 ]; then
-    echo "Ce script doit être exécuté en root pour fonctionner correctement" | tee -a /tmp/recon_error.log
+    echo "Ce script doit être exécuté en root pour fonctionner correctement" | tee -a "$ERROR_LOG"
     exit 1
 fi
 
@@ -53,7 +82,7 @@ check_binaries() {
     log "Vérification des outils requis..."
     
     local missing=0
-    for bin in ip nmap arp-scan tcpdump iw; do
+    for bin in ip nmap arp-scan tcpdump iw jq; do
         if ! command -v "$bin" >/dev/null 2>&1; then
             log "ERREUR: $bin introuvable - installation requise"
             ((missing++))
@@ -105,7 +134,7 @@ detect_wifi_interface() {
 
 # Attente d'une IP sur l'interface Wi-Fi
 wait_for_ip() {
-    local max_attempts=30 
+    local max_attempts="$IP_WAIT_ATTEMPTS"
     local attempt=1
     
     log "Attente d'une IP sur $INTERFACE..."
@@ -122,8 +151,8 @@ wait_for_ip() {
             return 0
         fi
         
-        log "Pas d'IP sur $INTERFACE (tentative $attempt/$max_attempts). Attente 3s..."
-        sleep 3
+        log "Pas d'IP sur $INTERFACE (tentative $attempt/$max_attempts). Attente ${IP_WAIT_INTERVAL}s..."
+        sleep "$IP_WAIT_INTERVAL"
         ((attempt++))
     done
     
@@ -214,9 +243,9 @@ arp_scan() {
     local target_network=$(get_target_network)
     if [ -n "$target_network" ]; then
         log "arp-scan sur $target_network"
-        timeout 60 arp-scan --interface="$INTERFACE" "$target_network" > "$OUTPUT_DIR/arp-scan.txt" 2>&1
+        timeout "$ARP_TIMEOUT" arp-scan --interface="$INTERFACE" "$target_network" > "$OUTPUT_DIR/arp-scan.txt" 2>&1
     else
-        timeout 60 arp-scan --localnet --interface="$INTERFACE" > "$OUTPUT_DIR/arp-scan.txt" 2>&1
+        timeout "$ARP_TIMEOUT" arp-scan --localnet --interface="$INTERFACE" > "$OUTPUT_DIR/arp-scan.txt" 2>&1
     fi
     
     local exit_code=$?
@@ -236,7 +265,7 @@ netbios_scan() {
     local target_network=$(get_target_network)
     if [ -n "$target_network" ]; then
         log "nbtscan sur $target_network"
-        timeout 90 nbtscan -n "$target_network" > "$OUTPUT_DIR/nbtscan.txt" 2>&1
+        timeout "$NBTSCAN_TIMEOUT" nbtscan -n "$target_network" > "$OUTPUT_DIR/nbtscan.txt" 2>&1
     else
         log "ERREUR: Réseau cible non détecté pour nbtscan"
         echo "ERREUR: Réseau non détecté" > "$OUTPUT_DIR/nbtscan.txt"
@@ -254,7 +283,7 @@ mdns_scan() {
     fi
     
     log "Lancement d'avahi-browse..."
-    timeout 60 avahi-browse -a -t > "$OUTPUT_DIR/mdns.txt" 2>&1
+    timeout "$MDNS_TIMEOUT" avahi-browse -a -t > "$OUTPUT_DIR/mdns.txt" 2>&1
     log "Découverte mDNS terminée"
 }
 
@@ -274,7 +303,7 @@ nmap_scan() {
     
     # Étape 1: Découverte d'hôtes (ping scan)
     log "Étape 1: Découverte d'hôtes vivants..."
-    timeout 60 nmap -n -sn -e "$INTERFACE" "$target_network" -oG hosts.gnmap >/dev/null 2>&1
+    timeout "$NMAP_DISCOVERY_TIMEOUT" nmap -n -sn -${NMAP_TIMING} -e "$INTERFACE" "$target_network" -oG hosts.gnmap >/dev/null 2>&1
     
     # Extract live hosts
     local live_hosts
@@ -286,7 +315,7 @@ nmap_scan() {
         log "Étape 2: Scan détaillé de $host_count hôte(s) vivant(s)..."
         
         # Étape 2: Scan détaillé des hôtes vivants uniquement
-        timeout 300 nmap -n -T3 -F -O -sC -e "$INTERFACE" \
+        timeout "$NMAP_DETAILED_TIMEOUT" nmap -e "$INTERFACE" -${NMAP_TIMING} -${NMAP_PORTS} $NMAP_OPTIONS \
             -oA nmap-live -oN nmap-live.txt \
             $live_hosts >/dev/null 2>&1
         
@@ -294,7 +323,7 @@ nmap_scan() {
     else
         log "Aucun hôte vivant détecté, scan complet du réseau..."
         # Fallback: scan complet mais rapide
-        timeout 200 nmap -n -T3 --top-ports 100 -e "$INTERFACE" \
+        timeout "$NMAP_DETAILED_TIMEOUT" nmap -n -${NMAP_TIMING} --top-ports 100 -e "$INTERFACE" \
             -oA nmap-fallback -oN nmap-fallback.txt \
             "$target_network" >/dev/null 2>&1
         log "Scan nmap fallback terminé"
@@ -311,7 +340,8 @@ network_capture() {
     log "Démarrage de la capture réseau passive (120s)..."
     
     # Capture optimisée sans résolution DNS
-    timeout 125 tcpdump -i "$INTERFACE" -nn -s 0 -w "$OUTPUT_DIR/tcpdump.pcap" -G 120 -W 1 >/dev/null 2>&1
+    timeout "$TCPDUMP_TIMEOUT" tcpdump -i "$INTERFACE" $TCPDUMP_OPTIONS -s "$TCPDUMP_SNAPLEN" \
+        -w "$OUTPUT_DIR/tcpdump.pcap" -G 120 -W 1 >/dev/null 2>&1
     
     log "Capture réseau terminée"
 }
@@ -380,10 +410,10 @@ main() {
     if ! wait_for_ip; then
         log "ATTENTION: Pas d'IP détectée, tentative de scan sur interface"
     fi
-    
+
     # Pause de stabilisation
-    log "Pause de stabilisation (5s)..."
-    sleep 5
+    log "Pause de stabilisation (${STABILIZATION_DELAY}s)..."
+    sleep "$STABILIZATION_DELAY"
     
     # Collecte des informations système
     get_network_info

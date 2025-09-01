@@ -1,0 +1,37 @@
+{
+  "interface": "",
+  "base_dir": "/home/pi/recon",
+  "global_timeout": 600,
+  "enable_mdns": 1,
+  "enable_netbios": 1,
+  "enable_tcpdump": 1,
+  "timeouts": {
+    "arp_scan": 60,
+    "nbtscan": 90,
+    "nmap_discovery": 60,
+    "nmap_detailed": 300,
+    "tcpdump": 125,
+    "mdns": 60
+  },
+  "paths": {
+    "lockfile": "/var/run/recon.lock",
+    "conflict_log": "/tmp/recon_conflict.log",
+    "error_log": "/tmp/recon_error.log"
+  },
+  "tools": {
+    "nmap": {
+      "timing": "T3",
+      "ports": "F",
+      "options": "-O -sC -n"
+    },
+    "tcpdump": {
+      "snaplen": 0,
+      "options": "-nn"
+    }
+  },
+  "network": {
+    "ip_wait_attempts": 30,
+    "ip_wait_interval": 3,
+    "stabilization_delay": 5
+  }
+}
