@@ -78,7 +78,7 @@ check_binaries() {
 # Detect Wi-Fi interface
 detect_interface() {
   local iface ip state
-  mapfile -t wifi_ifaces < <(find /sys/class/net -maxdepth 1 -type d -name "*" -path "*/wireless" -printf '%h\n' 2>/dev/null | xargs -n1 basename 2>/dev/null)
+  mapfile -t wifi_ifaces < <(find /sys/class/net -type d -path "/sys/class/net/*/wireless" -printf '%h\n' 2>/dev/null | xargs -n1 basename 2>/dev/null)
   if (( ${#wifi_ifaces[@]} == 0 )); then
     INTERFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
     log "No Wi-Fi interface found, defaulting to $INTERFACE"
@@ -166,7 +166,7 @@ fi
 
 # tcpdump capture
 if [[ "$MOD_TCPDUMP" == "true" && $HAVE_TCPDUMP -eq 1 ]]; then
-  (timeout "$TCPDUMP_TIMEOUT"s tcpdump -i "$INTERFACE" -w "$OUTPUT_DIR/capture.pcap" -nn || log_error "tcpdump failed") &
+  (timeout "$TCPDUMP_TIMEOUT"s tcpdump -p -i "$INTERFACE" -w "$OUTPUT_DIR/capture.pcap" -nn || log_error "tcpdump failed") &
   TCPDUMP_PID=$!
 else
   TCPDUMP_PID=0
@@ -250,7 +250,7 @@ if [[ -f "$OUTPUT_DIR/nmap-detailed.txt" ]]; then
     ip=$(echo "$line" | awk '{print $2}')
     ports=$(echo "$line" | awk -F"Ports: " '{print $2}')
     [[ -z "$ip" || -z "$ports" ]] && continue
-    PORTS[$ip]=$(echo "$ports" | sed 's#/open/[^ ]*//g' | sed 's/,/ /g')
+    PORTS[$ip]=$(echo "$ports" | sed 's#/open/[^ ]*//##g' | sed 's/,/ /g')
     echo "$ip ${PORTS[$ip]}" >> "$OUTPUT_DIR/port-summary.txt"
   done < <(grep "Ports:" "$OUTPUT_DIR/nmap-detailed.txt")
 else
@@ -303,7 +303,10 @@ if [[ "$TARGET_SCORING" == "true" ]]; then
       score=$((score+8)); reasons+=(">5 ports")
     fi
     # Hostname keywords
-    host=$(grep "^$ip " "$OUTPUT_DIR/reverse-dns.txt" | awk '{print $2}')
+    host="unknown"
+    if [[ -f "$OUTPUT_DIR/reverse-dns.txt" ]]; then
+      host=$(grep "^$ip " "$OUTPUT_DIR/reverse-dns.txt" | awk '{print $2}')
+    fi
     if echo "$host" | grep -Eiq '(server|admin|router|printer)'; then
       score=$((score+5)); reasons+=("hostname")
     fi
@@ -317,7 +320,10 @@ log "Building intel summary"
   echo '{"hosts":['
   first=1
   while read -r ip; do
-    host=$(grep "^$ip " "$OUTPUT_DIR/reverse-dns.txt" | awk '{print $2}')
+    host="unknown"
+    if [[ -f "$OUTPUT_DIR/reverse-dns.txt" ]]; then
+      host=$(grep "^$ip " "$OUTPUT_DIR/reverse-dns.txt" | awk '{print $2}')
+    fi
     os=$(grep "^$ip " "$OUTPUT_DIR/os-fingerprint.txt" | awk '{print $2}')
     ports="${PORTS[$ip]}"
     score=$(grep "^$ip:" "$OUTPUT_DIR/targets-scored.txt" | awk -F: '{print $2}')
