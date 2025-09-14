@@ -1,0 +1,31 @@
+{
+  "mode": "phase1",
+  "base_dir": "/home/raspi3/recon",
+  "global_timeout": 180,
+  "enable_extended_recon": true,
+  "adaptation": {
+    "large_network_threshold": 20,
+    "timeout_reduction_percent": 30
+  },
+  "modules": {
+    "arp_scan": true,
+    "nmap": true,
+    "mdns": true,
+    "netbios": true,
+    "tcpdump": true,
+    "ttl_fingerprint": true,
+    "reverse_dns": true,
+    "target_scoring": true
+  },
+  "timeouts": {
+    "arp_scan": 45,
+    "nmap_discovery": 45,
+    "nmap_detailed": 60,
+    "tcpdump": 60,
+    "ttl_fingerprint": 20,
+    "reverse_dns": 25,
+    "nbtscan": 45,
+    "mdns": 45
+  }
+}
+
