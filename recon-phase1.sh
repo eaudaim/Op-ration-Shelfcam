@@ -231,7 +231,7 @@ if [[ -f "$OUTPUT_DIR/nmap-detailed.txt" ]]; then
     ip=$(echo "$line" | awk '{print $2}')
     ports=$(echo "$line" | awk -F"Ports: " '{print $2}')
     [[ -z "$ip" || -z "$ports" ]] && continue
-    PORTS[$ip]=$(echo "$ports" | sed 's#/open/[^ ]*//##g' | sed 's/,/ /g')
+    PORTS[$ip]=$(echo "$ports" | sed 's#/open/[^ ]*##g' | sed 's/[[:space:]]*Ignored.*$//' | tr ' ' ',')
     echo "$ip ${PORTS[$ip]:-""}" >> "$OUTPUT_DIR/port-summary.txt"
   done < <(grep "Ports:" "$OUTPUT_DIR/nmap-detailed.txt")
 else

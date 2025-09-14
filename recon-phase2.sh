@@ -84,6 +84,7 @@ esac
 # enumeration helpers
 nmap_scan(){
   local ip="${1:-}" ports="${2:-}"
+  ports=$(echo "$ports" | sed 's/[[:space:]]*Ignored.*$//' | tr ' ' ',' | sed 's/,,*/,/g')
   log "Scanning $ip ports: $ports"
   timeout 60s nmap -sV -Pn -p "$ports" "$ip" -oN "$OUT_DIR/nmap-$ip.txt" >/dev/null 2>&1 || log_error "nmap scan failed on $ip"
 }
@@ -158,7 +159,7 @@ vulnerability_scanning(){
     grep -Eqi 'Apache/2\.[0-3]' "$f" && echo "$f: outdated Apache" >> "$out"
   done
   while read -r ip ports; do
-    for p in ${ports:-}; do
+    for p in ${ports//,/ }; do
       case "$p" in
         21|22|23|25|53|80|110|139|143|161|443|445|3389|5900) : ;;
         *) echo "$ip service on uncommon port $p" >> "$out" ;;
@@ -214,7 +215,7 @@ for entry in "${TARGETS[@]}"; do
   ports="${PORTS[$ip]:-}"
   [[ -z "$ports" ]] && continue
   [[ $HAVE_NMAP -eq 1 ]] && run_limited nmap_scan "$ip" "$ports" || log "Skipping nmap for $ip"
-  for p in ${ports:-}; do
+  for p in ${ports//,/ }; do
     case "$p" in
       80|443)
         ((has_banner)) && [[ $HAVE_CURL -eq 1 ]] && run_limited http_enum "$ip" "$p"
