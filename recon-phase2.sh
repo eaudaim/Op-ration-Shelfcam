@@ -179,10 +179,12 @@ detect_monitoring(){
   local out="$OUT_DIR/monitoring-check.txt"
   : > "$out"
   local ips
-  ips=$(awk -F: '{print $1}' "$TARGETS_FILE" | head -n "$target_limit")
-  [[ -z "$ips" ]] && return
-  timeout "${SCAN_TIMEOUT}s" nmap -sS -Pn -T1 -p 161,514,1514 "$ips" >> "$out" 2>&1 || log_error "monitoring port scan failed"
-  timeout "${SCAN_TIMEOUT}s" nmap -sn "$ips" >> "$out" 2>&1 || log_error "monitoring discovery failed"
+  ips=$(awk -F: '{print $1}' "$TARGETS_FILE" | head -n "$target_limit" | tr '\n' ' ' | sed 's/ $//')
+  [[ -z $ips ]] && return
+  # shellcheck disable=SC2086
+  timeout "${SCAN_TIMEOUT}s" nmap -sS -Pn -T1 -p 161,514,1514 $ips >> "$out" 2>&1 || log_error "monitoring port scan failed"
+  # shellcheck disable=SC2086
+  timeout "${SCAN_TIMEOUT}s" nmap -sn $ips >> "$out" 2>&1 || log_error "monitoring discovery failed"
   echo -e "\nIndicators:" >> "$out"
   # shellcheck disable=SC2094
   grep -Ei 'Fortinet|Check Point|Checkpoint|Palo Alto|honeypot' "$out" >> "$out" || true
