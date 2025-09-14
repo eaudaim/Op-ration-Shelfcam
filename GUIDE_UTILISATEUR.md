@@ -1,6 +1,6 @@
 # Guide utilisateur et technique
 
-Ce document décrit le fonctionnement détaillé du projet **Op-ration-Shelfcam**. Il combine un manuel d'utilisation et un guide technique pour faciliter le déploiement d'une reconnaissance réseau rapide (Phase 1) suivie d'une énumération ciblée (Phase 2).
+Ce document décrit le fonctionnement détaillé du projet. Il combine un manuel d'utilisation et un guide technique pour faciliter le déploiement d'une reconnaissance réseau rapide (Phase 1) suivie d'une énumération ciblée (Phase 2).
 
 ## 1. Aperçu général
 
