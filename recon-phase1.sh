@@ -77,36 +77,17 @@ check_binaries() {
 
 # Detect Wi-Fi interface
 detect_interface() {
-  local iface ip state
-  mapfile -t wifi_ifaces < <(find /sys/class/net -type d -path "/sys/class/net/*/wireless" -printf '%h\n' 2>/dev/null | xargs -n1 basename 2>/dev/null)
-  if (( ${#wifi_ifaces[@]} == 0 )); then
-    INTERFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
-    log "No Wi-Fi interface found, defaulting to $INTERFACE"
-    return
-  fi
-  for iface in "${wifi_ifaces[@]}"; do
-    ip=$(ip -o -4 addr show "$iface" | awk '{print $4}')
-    state=$(cat /sys/class/net/$iface/operstate 2>/dev/null)
-    log "Found Wi-Fi iface $iface state=$state ip=${ip:-none}"
-    if [[ $iface =~ ^wl(p|an) && -n $ip && $state == up ]]; then
-      INTERFACE=$iface; log "Selected Wi-Fi interface: $INTERFACE"; return
+  # Simple: look for wlan* directories directly
+  for iface in /sys/class/net/wlan*; do
+    if [[ -d "$iface" ]]; then
+      INTERFACE=$(basename "$iface")
+      log "Found Wi-Fi interface: $INTERFACE"
+      return
     fi
   done
-  for iface in "${wifi_ifaces[@]}"; do
-    ip=$(ip -o -4 addr show "$iface" | awk '{print $4}')
-    state=$(cat /sys/class/net/$iface/operstate 2>/dev/null)
-    if [[ -n $ip && $state == up ]]; then
-      INTERFACE=$iface; log "Selected Wi-Fi interface: $INTERFACE"; return
-    fi
-  done
-  for iface in "${wifi_ifaces[@]}"; do
-    state=$(cat /sys/class/net/$iface/operstate 2>/dev/null)
-    if [[ $state == up ]]; then
-      INTERFACE=$iface; log "Selected Wi-Fi interface without IP: $INTERFACE"; return
-    fi
-  done
-  INTERFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
-  log "Fallback to default interface: $INTERFACE"
+  # Fallback to default route interface
+  INTERFACE=$(ip route | awk '/^default/ {print $5}' | head -n1)
+  log "No wlan* found, using default: $INTERFACE"
 }
 
 # Wait for IP address (non-fatal)
@@ -251,7 +232,7 @@ if [[ -f "$OUTPUT_DIR/nmap-detailed.txt" ]]; then
     ports=$(echo "$line" | awk -F"Ports: " '{print $2}')
     [[ -z "$ip" || -z "$ports" ]] && continue
     PORTS[$ip]=$(echo "$ports" | sed 's#/open/[^ ]*//##g' | sed 's/,/ /g')
-    echo "$ip ${PORTS[$ip]}" >> "$OUTPUT_DIR/port-summary.txt"
+    echo "$ip ${PORTS[$ip]:-""}" >> "$OUTPUT_DIR/port-summary.txt"
   done < <(grep "Ports:" "$OUTPUT_DIR/nmap-detailed.txt")
 else
   log "No nmap detailed results; port summary skipped"
@@ -278,7 +259,7 @@ if [[ "$TARGET_SCORING" == "true" ]]; then
   while read -r ip; do
     score=0
     reasons=()
-    ports=${PORTS[$ip]}
+    ports=${PORTS[$ip]:-""}
     for p in $ports; do
       case "$p" in
         22*) score=$((score+10)); reasons+=("SSH") ;;
@@ -325,7 +306,7 @@ log "Building intel summary"
       host=$(grep "^$ip " "$OUTPUT_DIR/reverse-dns.txt" | awk '{print $2}')
     fi
     os=$(grep "^$ip " "$OUTPUT_DIR/os-fingerprint.txt" | awk '{print $2}')
-    ports="${PORTS[$ip]}"
+    ports="${PORTS[$ip]:-""}"
     score=$(grep "^$ip:" "$OUTPUT_DIR/targets-scored.txt" | awk -F: '{print $2}')
     os_conf=0.0
     host_conf=0.0
