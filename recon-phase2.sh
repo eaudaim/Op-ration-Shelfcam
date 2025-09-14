@@ -83,7 +83,7 @@ esac
 
 # enumeration helpers
 nmap_scan(){
-  local ip="$1" ports="$2"
+  local ip="${1:-}" ports="${2:-}"
   log "Scanning $ip ports: $ports"
   timeout 60s nmap -sV -Pn -p "$ports" "$ip" -oN "$OUT_DIR/nmap-$ip.txt" >/dev/null 2>&1 || log_error "nmap scan failed on $ip"
 }
@@ -99,7 +99,7 @@ snmp_enum(){
 }
 
 http_enum(){
-  local ip="$1" port="$2" proto="http"
+  local ip="${1:-}" port="${2:-}" proto="http"
   [[ "$port" == "443" ]] && proto="https"
   local out="$OUT_DIR/http-$ip-$port.txt"
   timeout 8s curl -skD - "$proto://$ip:$port" -o /dev/null > "$out" 2>&1 || log_error "curl failed on $ip:$port"
@@ -110,12 +110,16 @@ http_enum(){
 }
 
 ssh_enum(){
-  local ip="$1" port="$2" out="$OUT_DIR/ssh-$ip-$port.txt"
+  local ip="${1:-}"
+  local port="${2:-}"
+  local out="$OUT_DIR/ssh-$ip-$port.txt"
   timeout 8s ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "$ip" -vvv </dev/null > "$out" 2>&1 || log_error "ssh enumeration failed on $ip"
 }
 
 ftp_enum(){
-  local ip="$1" port="$2" out="$OUT_DIR/ftp-$ip-$port.txt"
+  local ip="${1:-}"
+  local port="${2:-}"
+  local out="$OUT_DIR/ftp-$ip-$port.txt"
   timeout 8s nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc failed on $ip:$port"
   timeout 8s ftp -inv "$ip" "$port" <<EOF >> "$out" 2>&1
 user anonymous anonymous
@@ -124,7 +128,9 @@ EOF
 }
 
 generic_banner(){
-  local ip="$1" port="$2" out="$OUT_DIR/banner-$ip-$port.txt"
+  local ip="${1:-}"
+  local port="${2:-}"
+  local out="$OUT_DIR/banner-$ip-$port.txt"
   timeout 5s nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc banner grab failed on $ip:$port"
 }
 
@@ -152,7 +158,7 @@ vulnerability_scanning(){
     grep -Eqi 'Apache/2\.[0-3]' "$f" && echo "$f: outdated Apache" >> "$out"
   done
   while read -r ip ports; do
-    for p in $ports; do
+    for p in ${ports:-}; do
       case "$p" in
         21|22|23|25|53|80|110|139|143|161|443|445|3389|5900) : ;;
         *) echo "$ip service on uncommon port $p" >> "$out" ;;
@@ -205,10 +211,10 @@ has_smb=$(echo "$FOCUS" | grep -q 'smb_enum' && echo 1 || echo 0)
 has_snmp=$(echo "$FOCUS" | grep -q 'snmp_scan' && echo 1 || echo 0)
 for entry in "${TARGETS[@]}"; do
   ip=${entry%%:*}
-  ports=${PORTS[$ip]}
+  ports="${PORTS[$ip]:-}"
   [[ -z "$ports" ]] && continue
   [[ $HAVE_NMAP -eq 1 ]] && run_limited nmap_scan "$ip" "$ports" || log "Skipping nmap for $ip"
-  for p in $ports; do
+  for p in ${ports:-}; do
     case "$p" in
       80|443)
         ((has_banner)) && [[ $HAVE_CURL -eq 1 ]] && run_limited http_enum "$ip" "$p"
