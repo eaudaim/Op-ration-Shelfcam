@@ -38,6 +38,12 @@ run_limited(){
 
 log "Output directory: $OUT_DIR"
 
+cleanup(){
+  log "Cleaning up background processes..."
+  jobs -p | xargs -r kill 2>/dev/null || true
+  kill "$GT_PID" 2>/dev/null || true
+}
+
 check_tools(){
   HAVE_NMAP=1; command -v nmap >/dev/null 2>&1 || { HAVE_NMAP=0; log_error "nmap missing"; }
   HAVE_CURL=1; command -v curl >/dev/null 2>&1 || { HAVE_CURL=0; log_error "curl missing"; }
@@ -53,6 +59,8 @@ check_tools
 (sleep "$GLOBAL_TIMEOUT" && log "Global timeout reached" && kill $$) &
 GT_PID=$!
 
+trap cleanup EXIT INT TERM
+
 # Determine strategy if auto
 if [[ "$STRATEGY" == "auto" ]]; then
   if [[ -f "$PHASE1_DIR/recommended-phase2.txt" ]]; then
@@ -67,7 +75,6 @@ log "Using strategy: $STRATEGY"
 TARGETS_FILE="$PHASE1_DIR/targets-scored.txt"
 if [[ ! -f "$TARGETS_FILE" ]]; then
   log "targets-scored.txt not found"
-  kill "$GT_PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -81,32 +88,63 @@ case "$STRATEGY" in
   *) target_limit=$MAX_TARGETS ;;
 esac
 
+case "$STRATEGY" in
+  intensive)
+    SCAN_TIMEOUT=60
+    ENUM_TIMEOUT=20
+    ;;
+  selective)
+    SCAN_TIMEOUT=45
+    ENUM_TIMEOUT=15
+    ;;
+  minimal)
+    SCAN_TIMEOUT=30
+    ENUM_TIMEOUT=10
+    ;;
+  *)
+    SCAN_TIMEOUT=30
+    ENUM_TIMEOUT=10
+    ;;
+esac
+
 # enumeration helpers
 nmap_scan(){
   local ip="${1:-}" ports="${2:-}"
-  ports=$(echo "$ports" | sed 's/[[:space:]]*Ignored.*$//' | tr ' ' ',' | sed 's/,,*/,/g')
+
+  if [[ -z "$ip" ]]; then
+    log_error "nmap_scan called with empty IP"
+    return 1
+  fi
+
+  ports=$(echo "$ports" | sed 's/[[:space:]]*Ignored.*$//' | tr ' ' ',' | sed 's/,,*/,/g' | sed 's/^,\|,$//g')
+
+  if [[ -z "$ports" ]]; then
+    log "Skipping $ip - no open ports detected"
+    return 0
+  fi
+
   log "Scanning $ip ports: $ports"
-  timeout 60s nmap -sV -Pn -p "$ports" "$ip" -oN "$OUT_DIR/nmap-$ip.txt" >/dev/null 2>&1 || log_error "nmap scan failed on $ip"
+  timeout "${SCAN_TIMEOUT}s" nmap -sV -Pn -p "$ports" "$ip" -oN "$OUT_DIR/nmap-$ip.txt" >/dev/null 2>&1 || log_error "nmap scan failed on $ip"
 }
 
 smb_enum(){
   local ip="$1"
-  timeout 20s smbclient -L "//$ip" -N > "$OUT_DIR/smb-$ip.txt" 2>&1 || log_error "smbclient failed on $ip"
+  timeout "${ENUM_TIMEOUT}s" smbclient -L "//$ip" -N > "$OUT_DIR/smb-$ip.txt" 2>&1 || log_error "smbclient failed on $ip"
 }
 
 snmp_enum(){
   local ip="$1"
-  timeout 20s snmpwalk -v2c -c public "$ip" 1.3.6.1.2.1.1 > "$OUT_DIR/snmp-$ip.txt" 2>&1 || log_error "snmpwalk failed on $ip"
+  timeout "${ENUM_TIMEOUT}s" snmpwalk -v2c -c public "$ip" 1.3.6.1.2.1.1 > "$OUT_DIR/snmp-$ip.txt" 2>&1 || log_error "snmpwalk failed on $ip"
 }
 
 http_enum(){
   local ip="${1:-}" port="${2:-}" proto="http"
   [[ "$port" == "443" ]] && proto="https"
   local out="$OUT_DIR/http-$ip-$port.txt"
-  timeout 8s curl -skD - "$proto://$ip:$port" -o /dev/null > "$out" 2>&1 || log_error "curl failed on $ip:$port"
-  timeout 8s curl -sk "$proto://$ip:$port" | grep -Eio 'wordpress|drupal|joomla|magento' | head -n1 >> "$out" 2>/dev/null || true
+  timeout "${ENUM_TIMEOUT}s" curl -skD - "$proto://$ip:$port" -o /dev/null > "$out" 2>&1 || log_error "curl failed on $ip:$port"
+  timeout "${ENUM_TIMEOUT}s" curl -sk "$proto://$ip:$port" | grep -Eio 'wordpress|drupal|joomla|magento' | head -n1 >> "$out" 2>/dev/null || true
   local rc
-  rc=$(timeout 5s curl -sk -o /dev/null -w '%{http_code}' "$proto://$ip:$port/robots.txt" 2>/dev/null || true)
+  rc=$(timeout "${ENUM_TIMEOUT}s" curl -sk -o /dev/null -w '%{http_code}' "$proto://$ip:$port/robots.txt" 2>/dev/null || true)
   echo "robots:$rc" >> "$out"
 }
 
@@ -114,15 +152,15 @@ ssh_enum(){
   local ip="${1:-}"
   local port="${2:-}"
   local out="$OUT_DIR/ssh-$ip-$port.txt"
-  timeout 8s ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "$ip" -vvv </dev/null > "$out" 2>&1 || log_error "ssh enumeration failed on $ip"
+  timeout "${ENUM_TIMEOUT}s" ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p "$port" "$ip" -vvv </dev/null > "$out" 2>&1 || log_error "ssh enumeration failed on $ip"
 }
 
 ftp_enum(){
   local ip="${1:-}"
   local port="${2:-}"
   local out="$OUT_DIR/ftp-$ip-$port.txt"
-  timeout 8s nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc failed on $ip:$port"
-  timeout 8s ftp -inv "$ip" "$port" <<EOF >> "$out" 2>&1
+  timeout "${ENUM_TIMEOUT}s" nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc failed on $ip:$port"
+  timeout "${ENUM_TIMEOUT}s" ftp -inv "$ip" "$port" <<EOF >> "$out" 2>&1
 user anonymous anonymous
 quit
 EOF
@@ -132,7 +170,7 @@ generic_banner(){
   local ip="${1:-}"
   local port="${2:-}"
   local out="$OUT_DIR/banner-$ip-$port.txt"
-  timeout 5s nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc banner grab failed on $ip:$port"
+  timeout "${ENUM_TIMEOUT}s" nc -vn "$ip" "$port" < /dev/null > "$out" 2>&1 || log_error "nc banner grab failed on $ip:$port"
 }
 
 detect_monitoring(){
@@ -141,11 +179,12 @@ detect_monitoring(){
   local out="$OUT_DIR/monitoring-check.txt"
   : > "$out"
   local ips
-  ips=$(awk -F: '{print $1}' "$TARGETS_FILE" | head -n $target_limit)
+  ips=$(awk -F: '{print $1}' "$TARGETS_FILE" | head -n "$target_limit")
   [[ -z "$ips" ]] && return
-  timeout 60s nmap -sS -Pn -T1 -p 161,514,1514 $ips >> "$out" 2>&1 || log_error "monitoring port scan failed"
-  timeout 60s nmap -sn $ips >> "$out" 2>&1 || log_error "monitoring discovery failed"
+  timeout "${SCAN_TIMEOUT}s" nmap -sS -Pn -T1 -p 161,514,1514 "$ips" >> "$out" 2>&1 || log_error "monitoring port scan failed"
+  timeout "${SCAN_TIMEOUT}s" nmap -sn "$ips" >> "$out" 2>&1 || log_error "monitoring discovery failed"
   echo -e "\nIndicators:" >> "$out"
+  # shellcheck disable=SC2094
   grep -Ei 'Fortinet|Check Point|Checkpoint|Palo Alto|honeypot' "$out" >> "$out" || true
 }
 
@@ -167,9 +206,9 @@ vulnerability_scanning(){
     done
   done < "$PHASE1_DIR/port-summary.txt"
   if [[ $HAVE_CURL -eq 1 ]]; then
-    for ip in $(awk -F: '{print $1}' "$TARGETS_FILE" | head -n $target_limit); do
+    for ip in $(awk -F: '{print $1}' "$TARGETS_FILE" | head -n "$target_limit"); do
       for proto in http https; do
-        code=$(timeout 5s curl -sk -u admin:admin -o /dev/null -w '%{http_code}' "$proto://$ip" 2>/dev/null || true)
+        code=$(timeout "${ENUM_TIMEOUT}s" curl -sk -u admin:admin -o /dev/null -w '%{http_code}' "$proto://$ip" 2>/dev/null || true)
         [[ "$code" == "200" ]] && echo "$ip ($proto) accepts admin/admin" >> "$out"
       done
     done
@@ -201,6 +240,10 @@ final_report(){
 }
 
 # Load port information
+if [[ ! -f "$PHASE1_DIR/port-summary.txt" || ! -s "$PHASE1_DIR/port-summary.txt" ]]; then
+  log_error "port-summary.txt missing or empty"
+  exit 1
+fi
 declare -A PORTS
 while read -r ip ports; do
   PORTS[$ip]="$ports"
@@ -212,9 +255,19 @@ has_smb=$(echo "$FOCUS" | grep -q 'smb_enum' && echo 1 || echo 0)
 has_snmp=$(echo "$FOCUS" | grep -q 'snmp_scan' && echo 1 || echo 0)
 for entry in "${TARGETS[@]}"; do
   ip=${entry%%:*}
+
+  if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    log_error "Invalid IP format: $ip"
+    continue
+  fi
+
   ports="${PORTS[$ip]:-}"
   [[ -z "$ports" ]] && continue
-  [[ $HAVE_NMAP -eq 1 ]] && run_limited nmap_scan "$ip" "$ports" || log "Skipping nmap for $ip"
+  if [[ $HAVE_NMAP -eq 1 ]]; then
+    run_limited nmap_scan "$ip" "$ports"
+  else
+    log "Skipping nmap for $ip"
+  fi
   for p in ${ports//,/ }; do
     case "$p" in
       80|443)
@@ -244,6 +297,4 @@ wait
 detect_monitoring
 vulnerability_scanning
 final_report
-
-kill "$GT_PID" 2>/dev/null || true
 log "Phase 2 complete"
